@@ -1,237 +1,123 @@
 #!/usr/bin/env python3
-"""
-Cryptoguard — CLI Password Strength Analyzer (with Power Meter)
 
-Features:
-- Check length and character classes (lower, upper, digits, symbols)
-- Estimate entropy (bits)
-- Strength classification and 50-block power meter
-- Optional JSON output of the analysis
-"""
-
-from __future__ import annotations
 import argparse
-import math
-import json
-import sys
-from pathlib import Path
-from typing import Dict
+import hashlib
+import requests
+from zxcvbn import zxcvbn
 
-from banner import print_banner
-
-SYMBOLS = "!#$%&'()*+,-./:;<=>?@[]^_`{|}~"
-
-
-def estimate_entropy(password: str) -> float:
-    pool = 0
-
-    if any(c.islower() for c in password):
-        pool += 26
-
-    if any(c.isupper() for c in password):
-        pool += 26
-
-    if any(c.isdigit() for c in password):
-        pool += 10
-
-    if any(c in SYMBOLS for c in password):
-        pool += len(SYMBOLS)
-
-    if pool == 0:
-        return 0.0
-
-    return len(password) * math.log2(pool)
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
 
 
-def classify_strength(entropy_bits: float, length: int) -> str:
+def breach_check(password):
 
-    if entropy_bits < 28 or length < 6:
-        return "Very Weak"
+    sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
+    prefix = sha1[:5]
+    suffix = sha1[5:]
 
-    if entropy_bits < 36:
-        return "Weak"
+    url = f"https://api.pwnedpasswords.com/range/{prefix}"
 
-    if entropy_bits < 60:
-        return "Moderate"
+    try:
+        res = requests.get(url, timeout=5)
 
-    if entropy_bits < 90:
-        return "Strong"
+        for line in res.text.splitlines():
+            hash_suffix, count = line.split(":")
 
-    return "Very Strong"
+            if hash_suffix == suffix:
+                return int(count)
 
+    except Exception:
+        return None
 
-def analyze_password(password: str) -> Dict:
-
-    length = len(password)
-
-    has_lower = any(c.islower() for c in password)
-    has_upper = any(c.isupper() for c in password)
-    has_digit = any(c.isdigit() for c in password)
-    has_symbol = any(c in SYMBOLS for c in password)
-
-    entropy = estimate_entropy(password)
-
-    strength = classify_strength(entropy, length)
-
-    return {
-        "password": password,
-        "length": length,
-        "has_lower": has_lower,
-        "has_upper": has_upper,
-        "has_digit": has_digit,
-        "has_symbol": has_symbol,
-        "entropy_bits": round(entropy, 2),
-        "strength": strength
-    }
+    return 0
 
 
-def compute_score(res: Dict) -> int:
+def strength_meter(score):
 
-    length = res["length"]
-    entropy = res["entropy_bits"]
-
-    length_score = min(length, 20) / 20 * 35
-
-    diversity = sum([
-        res["has_lower"],
-        res["has_upper"],
-        res["has_digit"],
-        res["has_symbol"]
-    ])
-
-    diversity_score = (diversity / 4) * 30
-
-    entropy_score = min(entropy, 120) / 120 * 35
-
-    score = length_score + diversity_score + entropy_score
-
-    return int(round(score))
-
-
-def strength_meter(score: int, length: int = 50) -> str:
-
-    filled = int(length * score // 100)
+    length = 50
+    filled = int(length * score / 4)
 
     bar = "█" * filled + "░" * (length - filled)
 
-    return f"[{bar}] {score}%"
+    percent = int((score / 4) * 100)
+
+    return f"[{bar}] {percent}%"
 
 
-def parse_args():
+def color_strength(score):
 
-    p = argparse.ArgumentParser(
-        prog="cryptoguard",
-        description="Cryptoguard — password strength analyzer (CLI)"
-    )
+    if score <= 1:
+        return RED
 
-    p.add_argument(
-        "-p",
-        "--password",
-        help="Password to analyze. If omitted, reads from stdin.",
-        default=None
-    )
+    elif score == 2:
+        return YELLOW
 
-    p.add_argument(
-        "--json-out",
-        type=Path,
-        help="Write JSON output to file"
-    )
-
-    p.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Show detailed output"
-    )
-
-    return p.parse_args()
+    else:
+        return GREEN
 
 
-def mask_password(password: str) -> str:
+def analyze(password):
 
-    if len(password) <= 2:
-        return "*" * len(password)
+    result = zxcvbn(password)
 
-    return password[0] + "*" * (len(password) - 2) + password[-1]
+    score = result["score"]
+
+    crack_time = result["crack_times_display"]["offline_fast_hashing_1e10_per_second"]
+
+    feedback = result["feedback"]
+
+    breach_count = breach_check(password)
+
+    return score, crack_time, feedback, breach_count
 
 
 def main():
 
-    print_banner()
+    parser = argparse.ArgumentParser(description="CryptoGuard Advanced Password Analyzer")
 
-    args = parse_args()
+    parser.add_argument("-p", "--password", help="Password to analyze")
 
-    if args.password is None:
+    args = parser.parse_args()
 
-        if sys.stdin.isatty():
+    if not args.password:
+        password = input("Enter password to analyze: ")
+    else:
+        password = args.password
 
-            try:
-                args.password = input("Enter password to analyze: ")
-            except KeyboardInterrupt:
-                print()
-                sys.exit(1)
+    score, crack_time, feedback, breach_count = analyze(password)
 
-        else:
-            args.password = sys.stdin.read().strip()
+    meter = strength_meter(score)
 
-    res = analyze_password(args.password)
-
-    score = compute_score(res)
-
-    meter = strength_meter(score, length=50)
-
-    masked = mask_password(res["password"])
+    color = color_strength(score)
 
     print()
+    print(color + "[+] Password Strength Score:", score, "/4" + RESET)
+    print("[+] Estimated Crack Time:", crack_time)
+    print()
+    print("[=] Power:", meter)
+    print()
 
-    print(f"[+] Password: {masked}")
-    print(f"[+] Length: {res['length']}")
+    if breach_count is None:
+        print(BLUE + "[!] Breach check unavailable" + RESET)
 
-    contains = []
+    elif breach_count > 0:
+        print(RED + f"[!] Password found in breaches {breach_count} times!" + RESET)
 
-    if res["has_lower"]:
-        contains.append("lower")
+    else:
+        print(GREEN + "[+] Password not found in known breaches" + RESET)
 
-    if res["has_upper"]:
-        contains.append("upper")
-
-    if res["has_digit"]:
-        contains.append("digits")
-
-    if res["has_symbol"]:
-        contains.append("symbols")
-
-    print(f"[+] Contains: {', '.join(contains) if contains else 'none'}")
-
-    print(f"[+] Entropy: {res['entropy_bits']} bits")
-
-    if args.verbose:
+    if feedback["warning"]:
         print()
-        print("Details:")
-        print(json.dumps(res, indent=2))
+        print(RED + "Warning:" + RESET, feedback["warning"])
 
-    print()
-
-    print(f"[=] Strength: {res['strength']}")
-    print(f"[=] Power: {meter}")
-
-    if args.json_out:
-
-        try:
-
-            args.json_out.write_text(
-                json.dumps(
-                    {"summary": res, "score": score},
-                    indent=2
-                ),
-                encoding="utf-8"
-            )
-
-            print(f"[+] JSON report written to {args.json_out}")
-
-        except Exception as e:
-
-            print(f"[!] Failed to write JSON: {e}")
+    if feedback["suggestions"]:
+        print()
+        print("Suggestions:")
+        for s in feedback["suggestions"]:
+            print("-", s)
 
 
 if __name__ == "__main__":
