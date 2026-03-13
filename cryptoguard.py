@@ -21,16 +21,6 @@ from banner import print_banner
 
 SYMBOLS = "!#$%&'()*+,-./:;<=>?@[]^_`{|}~"
 
-COMMON_PASSWORDS = {
-    "password",
-    "123456",
-    "12345678",
-    "admin",
-    "qwerty",
-    "letmein",
-    "welcome"
-}
-
 
 def estimate_entropy(password: str) -> float:
     pool = 0
@@ -53,21 +43,21 @@ def estimate_entropy(password: str) -> float:
     return len(password) * math.log2(pool)
 
 
-def classify_strength(entropy_bits: float, length: int, password: str) -> str:
+def classify_strength(entropy_bits: float, length: int) -> str:
 
-    if password.lower() in COMMON_PASSWORDS:
+    if entropy_bits < 28 or length < 6:
         return "Very Weak"
 
-    if length < 6 or entropy_bits < 28:
-        return "Very Weak"
-    elif entropy_bits < 40:
+    if entropy_bits < 36:
         return "Weak"
-    elif entropy_bits < 65:
+
+    if entropy_bits < 60:
         return "Moderate"
-    elif entropy_bits < 90:
+
+    if entropy_bits < 90:
         return "Strong"
-    else:
-        return "Very Strong"
+
+    return "Very Strong"
 
 
 def analyze_password(password: str) -> Dict:
@@ -81,7 +71,7 @@ def analyze_password(password: str) -> Dict:
 
     entropy = estimate_entropy(password)
 
-    strength = classify_strength(entropy, length, password)
+    strength = classify_strength(entropy, length)
 
     return {
         "password": password,
